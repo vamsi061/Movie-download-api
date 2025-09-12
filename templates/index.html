@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Extractor API</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input[type="url"], select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        input[type="url"]:focus, select:focus {
+            border-color: #4CAF50;
+            outline: none;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        button {
+            flex: 1;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        .btn-extract {
+            background-color: #2196F3;
+            color: white;
+        }
+        .btn-extract:hover {
+            background-color: #1976D2;
+        }
+        .btn-download {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .btn-download:hover {
+            background-color: #45a049;
+        }
+        .btn-download:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .results {
+            margin-top: 30px;
+            padding: 20px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+            border-left: 4px solid #4CAF50;
+        }
+        .error {
+            border-left-color: #f44336;
+            background-color: #ffebee;
+        }
+        .source-item {
+            background: white;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            border: 1px solid #ddd;
+        }
+        .source-url {
+            word-break: break-all;
+            color: #666;
+            font-size: 14px;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background-color: #4CAF50;
+            transition: width 0.3s ease;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196F3;
+        }
+        .download-link {
+            display: inline-block;
+            margin-top: 10px;
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+        }
+        .download-link:hover {
+            background-color: #45a049;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 Video Extractor API</h1>
+        
+        <div class="form-group">
+            <label for="videoUrl">Video URL:</label>
+            <input type="url" id="videoUrl" placeholder="https://example.com/video" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="quality">Quality Preference:</label>
+            <select id="quality">
+                <option value="best">Best Quality</option>
+                <option value="1080">1080p</option>
+                <option value="720">720p</option>
+                <option value="480">480p</option>
+                <option value="360">360p</option>
+                <option value="worst">Worst Quality</option>
+            </select>
+        </div>
+        
+        <div class="button-group">
+            <button class="btn-extract" onclick="extractSources()">
+                <span id="extractText">🔍 Extract Sources</span>
+                <span id="extractLoading" class="loading" style="display: none;"></span>
+            </button>
+            <button class="btn-download" id="downloadBtn" onclick="startDownload()" disabled>
+                <span id="downloadText">⬇️ Download Video</span>
+                <span id="downloadLoading" class="loading" style="display: none;"></span>
+            </button>
+        </div>
+        
+        <div id="results"></div>
+        <div id="downloadStatus"></div>
+    </div>
+
+    <script>
+        let currentSources = [];
+        let downloadId = null;
+        let statusInterval = null;
+
+        async function extractSources() {
+            const url = document.getElementById('videoUrl').value;
+            if (!url) {
+                alert('Please enter a video URL');
+                return;
+            }
+
+            const extractBtn = document.querySelector('.btn-extract');
+            const extractText = document.getElementById('extractText');
+            const extractLoading = document.getElementById('extractLoading');
+            
+            extractBtn.disabled = true;
+            extractText.style.display = 'none';
+            extractLoading.style.display = 'inline-block';
+
+            try {
+                const response = await fetch('/extract', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ url: url })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    currentSources = data.sources;
+                    displaySources(data);
+                    document.getElementById('downloadBtn').disabled = false;
+                } else {
+                    displayError(data.error || 'Failed to extract sources');
+                }
+            } catch (error) {
+                displayError('Network error: ' + error.message);
+            } finally {
+                extractBtn.disabled = false;
+                extractText.style.display = 'inline';
+                extractLoading.style.display = 'none';
+            }
+        }
+
+        async function startDownload() {
+            const url = document.getElementById('videoUrl').value;
+            const quality = document.getElementById('quality').value;
+
+            const downloadBtn = document.getElementById('downloadBtn');
+            const downloadText = document.getElementById('downloadText');
+            const downloadLoading = document.getElementById('downloadLoading');
+            
+            downloadBtn.disabled = true;
+            downloadText.style.display = 'none';
+            downloadLoading.style.display = 'inline-block';
+
+            try {
+                const response = await fetch('/download', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ url: url, quality: quality })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    downloadId = data.download_id;
+                    displayDownloadStarted(data);
+                    startStatusPolling();
+                } else {
+                    displayError(data.error || 'Failed to start download');
+                    downloadBtn.disabled = false;
+                    downloadText.style.display = 'inline';
+                    downloadLoading.style.display = 'none';
+                }
+            } catch (error) {
+                displayError('Network error: ' + error.message);
+                downloadBtn.disabled = false;
+                downloadText.style.display = 'inline';
+                downloadLoading.style.display = 'none';
+            }
+        }
+
+        function startStatusPolling() {
+            if (statusInterval) clearInterval(statusInterval);
+            
+            statusInterval = setInterval(async () => {
+                if (!downloadId) return;
+
+                try {
+                    const response = await fetch(`/status/${downloadId}`);
+                    const status = await response.json();
+                    
+                    updateDownloadStatus(status);
+                    
+                    if (status.status === 'completed' || status.status === 'failed' || status.status === 'cancelled') {
+                        clearInterval(statusInterval);
+                        statusInterval = null;
+                        
+                        const downloadBtn = document.getElementById('downloadBtn');
+                        const downloadText = document.getElementById('downloadText');
+                        const downloadLoading = document.getElementById('downloadLoading');
+                        
+                        downloadBtn.disabled = false;
+                        downloadText.style.display = 'inline';
+                        downloadLoading.style.display = 'none';
+                    }
+                } catch (error) {
+                    console.error('Status polling error:', error);
+                }
+            }, 2000);
+        }
+
+        function displaySources(data) {
+            const resultsDiv = document.getElementById('results');
+            let html = `
+                <h3>✅ Found ${data.sources_found} video source(s):</h3>
+            `;
+            
+            data.sources.forEach((source, index) => {
+                html += `
+                    <div class="source-item">
+                        <strong>Source ${index + 1}:</strong><br>
+                        📺 Quality: ${source.quality > 0 ? source.quality + 'p' : 'Unknown'}<br>
+                        📄 Format: ${source.format}<br>
+                        🔧 Method: ${source.method}<br>
+                        📝 Title: ${source.title}<br>
+                        ${source.filesize ? `📊 Size: ${(source.filesize / (1024*1024)).toFixed(2)} MB<br>` : ''}
+                        ${source.duration ? `⏱️ Duration: ${Math.floor(source.duration / 60)}:${(source.duration % 60).toString().padStart(2, '0')}<br>` : ''}
+                        <div class="source-url">🔗 ${source.url.substring(0, 100)}${source.url.length > 100 ? '...' : ''}</div>
+                    </div>
+                `;
+            });
+            
+            resultsDiv.innerHTML = html;
+            resultsDiv.className = 'results';
+        }
+
+        function displayDownloadStarted(data) {
+            const statusDiv = document.getElementById('downloadStatus');
+            statusDiv.innerHTML = `
+                <div class="status">
+                    <h3>🚀 Download Started</h3>
+                    <p><strong>Download ID:</strong> ${data.download_id}</p>
+                    <p><strong>Selected Source:</strong></p>
+                    <ul>
+                        <li>Quality: ${data.selected_source.quality > 0 ? data.selected_source.quality + 'p' : 'Unknown'}</li>
+                        <li>Format: ${data.selected_source.format}</li>
+                        <li>Method: ${data.selected_source.method}</li>
+                    </ul>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                    </div>
+                    <p id="statusMessage">Initializing download...</p>
+                </div>
+            `;
+        }
+
+        function updateDownloadStatus(status) {
+            const progressFill = document.getElementById('progressFill');
+            const statusMessage = document.getElementById('statusMessage');
+            
+            if (progressFill) {
+                progressFill.style.width = status.progress + '%';
+            }
+            
+            if (statusMessage) {
+                let message = status.message;
+                if (status.status === 'downloading' && status.downloaded && status.total_size) {
+                    const downloadedMB = (status.downloaded / (1024*1024)).toFixed(2);
+                    const totalMB = (status.total_size / (1024*1024)).toFixed(2);
+                    message += ` (${downloadedMB}/${totalMB} MB)`;
+                }
+                statusMessage.textContent = message;
+                
+                if (status.status === 'completed') {
+                    statusMessage.innerHTML = `
+                        ${message}<br>
+                        <a href="/download/${downloadId}" class="download-link" download>
+                            📥 Download File (${(status.file_size / (1024*1024)).toFixed(2)} MB)
+                        </a>
+                    `;
+                }
+            }
+        }
+
+        function displayError(error) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = `<h3>❌ Error:</h3><p>${error}</p>`;
+            resultsDiv.className = 'results error';
+        }
+
+        // Example URLs for testing
+        document.addEventListener('DOMContentLoaded', function() {
+            const urlInput = document.getElementById('videoUrl');
+            urlInput.placeholder = 'https://roa.ibomma.foo/d/Paradha-2025-NeKq-telugu-movie-watch-online.html';
+        });
+    </script>
+</body>
+</html>
