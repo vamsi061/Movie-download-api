@@ -629,11 +629,39 @@ class SimpleVideoExtractor:
     
     def _clean_url(self, url: str) -> str:
         """Clean and normalize URL"""
-        return url.strip().strip('"\'').replace('\\/', '/')
+        url = url.strip().strip('"\'').replace('\\/', '/')
+        
+        # Handle malformed URLs with multiple formats separated by |
+        if '|' in url:
+            # Split by | and take the first valid URL
+            parts = url.split('|')
+            for part in parts:
+                part = part.strip()
+                if part.startswith(('http://', 'https://')) and not part.startswith(',//'):
+                    return part
+            # If no valid URL found, return empty string
+            return ""
+        
+        # Fix malformed URLs starting with ,//
+        if url.startswith(',//'):
+            return ""
+        
+        return url
     
     def _is_valid_video_url(self, url: str) -> bool:
         """Check if URL is a valid video URL"""
         if not url or not isinstance(url, str) or len(url) < 10:
+            return False
+        
+        # Clean the URL first
+        url = url.strip()
+        
+        # Check for malformed URLs
+        if url.startswith(',//') or '|' in url:
+            return False
+        
+        # Must start with http:// or https://
+        if not url.startswith(('http://', 'https://')):
             return False
         
         url_lower = url.lower()
@@ -670,6 +698,14 @@ class SimpleVideoExtractor:
             for pattern in patterns:
                 if pattern in url_lower:
                     return quality
+        
+        # If no quality found but it's a direct video file, assume decent quality
+        if any(ext in url_lower for ext in ['.mp4', '.mkv', '.avi', '.mov']):
+            # Check file size indicators or assume 720p for direct video files
+            if any(indicator in url_lower for indicator in ['high', 'hq', 'full']):
+                return 1080
+            else:
+                return 720
         
         return 0
     
@@ -722,21 +758,30 @@ class SimpleVideoExtractor:
     
     def _process_sources(self, sources: List[Dict]) -> List[Dict]:
         """Remove duplicates and sort sources"""
-        # Remove duplicates based on URL
+        # Remove duplicates based on URL and filter invalid URLs
         seen_urls = set()
         unique_sources = []
         
         for source in sources:
             url = source['url']
-            if url not in seen_urls:
-                seen_urls.add(url)
+            # Clean the URL and check if it's valid
+            clean_url = self._clean_url(url)
+            if clean_url and self._is_valid_video_url(clean_url) and clean_url not in seen_urls:
+                seen_urls.add(clean_url)
+                source['url'] = clean_url  # Update with cleaned URL
+                
                 # Ensure quality is an integer
                 if source['quality'] is None or not isinstance(source['quality'], int):
                     source['quality'] = 0
+                
+                # Try to detect quality from filename if not already detected
+                if source['quality'] == 0:
+                    source['quality'] = self._guess_quality_from_url(clean_url)
+                
                 unique_sources.append(source)
         
-        # Sort by quality (highest first)
-        unique_sources.sort(key=lambda x: x['quality'], reverse=True)
+        # Sort by quality (highest first), then by URL length (shorter URLs often more reliable)
+        unique_sources.sort(key=lambda x: (x['quality'], -len(x['url'])), reverse=True)
         
         return unique_sources
     

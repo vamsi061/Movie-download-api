@@ -229,23 +229,44 @@ def start_download():
                 'url': url
             }), 404
         
-        # Select best source based on quality preference
+        # Filter out invalid URLs first
+        valid_sources = []
+        for source in sources:
+            url = source['url']
+            # Check if URL is properly formatted and accessible
+            if (url.startswith(('http://', 'https://')) and 
+                not url.startswith(',//') and 
+                '|' not in url and
+                len(url) > 20):  # Reasonable URL length
+                valid_sources.append(source)
+        
+        if not valid_sources:
+            return jsonify({
+                'error': 'No valid video sources found. All extracted URLs are malformed.',
+                'url': url,
+                'extracted_sources': len(sources),
+                'valid_sources': 0
+            }), 404
+        
+        # Select best source based on quality preference from valid sources
         selected_source = None
         if quality_preference == 'best':
-            selected_source = max(sources, key=lambda x: x['quality'])
+            # Sort by quality, then by URL reliability (prefer direct file URLs)
+            valid_sources.sort(key=lambda x: (x['quality'], 1 if '.mp4' in x['url'] else 0), reverse=True)
+            selected_source = valid_sources[0]
         elif quality_preference == 'worst':
-            selected_source = min(sources, key=lambda x: x['quality'])
+            selected_source = min(valid_sources, key=lambda x: x['quality'])
         else:
             # Try to find specific quality
             try:
                 target_quality = int(quality_preference)
-                # Find closest quality
-                selected_source = min(sources, key=lambda x: abs(x['quality'] - target_quality))
+                # Find closest quality from valid sources
+                selected_source = min(valid_sources, key=lambda x: abs(x['quality'] - target_quality))
             except ValueError:
-                selected_source = sources[0]  # Default to first source
+                selected_source = valid_sources[0]  # Default to first valid source
         
         if not selected_source:
-            selected_source = sources[0]
+            selected_source = valid_sources[0]
         
         # Generate download ID
         download_id = str(uuid.uuid4())
@@ -274,6 +295,8 @@ def start_download():
                 'format': selected_source['format'],
                 'method': selected_source['method']
             },
+            'total_sources_found': len(sources),
+            'valid_sources_found': len(valid_sources),
             'status_url': f'/status/{download_id}',
             'download_url': f'/download/{download_id}',
             'message': 'Download started. Use status_url to track progress.'
