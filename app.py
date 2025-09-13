@@ -44,13 +44,22 @@ class VideoDownloadManager:
     def download_video_async(self, download_id, video_source, output_path):
         """Download video asynchronously and update status"""
         try:
+            # Initialize status - make sure it's set before any processing
             download_status[download_id] = {
-                'status': 'downloading',
+                'status': 'initializing',
                 'progress': 0,
-                'message': 'Starting download...',
+                'message': 'Initializing download...',
                 'started_at': datetime.now().isoformat(),
-                'file_path': output_path
+                'file_path': output_path,
+                'download_id': download_id,
+                'source_url': video_source['url'][:100] + '...' if len(video_source['url']) > 100 else video_source['url']
             }
+            
+            # Update to downloading status
+            download_status[download_id].update({
+                'status': 'downloading',
+                'message': 'Starting download...'
+            })
             
             # Custom download with progress tracking
             url = video_source['url']
@@ -100,22 +109,36 @@ class VideoDownloadManager:
                     'progress': 100,
                     'message': 'Download completed successfully!',
                     'completed_at': datetime.now().isoformat(),
-                    'file_size': downloaded
+                    'file_size': downloaded,
+                    'file_ready': True
                 })
                 download_files[download_id] = output_path
+                logger.info(f"Download {download_id} completed successfully. File: {output_path}")
             else:
                 download_status[download_id].update({
                     'status': 'failed',
                     'message': 'Download was cancelled or failed',
-                    'completed_at': datetime.now().isoformat()
+                    'completed_at': datetime.now().isoformat(),
+                    'file_ready': False
                 })
+                logger.error(f"Download {download_id} failed or was cancelled")
                 
         except Exception as e:
-            logger.error(f"Download failed: {e}")
+            logger.error(f"Download {download_id} failed: {e}")
+            # Ensure the download_id exists in status before updating
+            if download_id not in download_status:
+                download_status[download_id] = {
+                    'download_id': download_id,
+                    'started_at': datetime.now().isoformat()
+                }
+            
             download_status[download_id].update({
                 'status': 'failed',
+                'progress': 0,
                 'message': f'Download failed: {str(e)}',
-                'completed_at': datetime.now().isoformat()
+                'completed_at': datetime.now().isoformat(),
+                'file_ready': False,
+                'error': str(e)
             })
 
 # Global download manager
@@ -310,7 +333,13 @@ def start_download():
 def get_download_status(download_id):
     """Get download status"""
     if download_id not in download_status:
-        return jsonify({'error': 'Download ID not found'}), 404
+        logger.warning(f"Status requested for unknown download ID: {download_id}")
+        return jsonify({
+            'error': 'Download ID not found',
+            'download_id': download_id,
+            'message': 'This download ID does not exist or has been cleaned up',
+            'status': 'not_found'
+        }), 404
     
     status = download_status[download_id].copy()
     
@@ -319,10 +348,13 @@ def get_download_status(download_id):
         file_path = download_files[download_id]
         if os.path.exists(file_path):
             status['file_ready'] = True
-            status['file_size'] = os.path.getsize(file_path)
+            if 'file_size' not in status:
+                status['file_size'] = os.path.getsize(file_path)
         else:
             status['file_ready'] = False
+            status['message'] = 'Download completed but file not found'
     
+    logger.info(f"Status check for {download_id}: {status['status']} - {status.get('progress', 0)}%")
     return jsonify(status)
 
 @app.route('/download/<download_id>', methods=['GET'])

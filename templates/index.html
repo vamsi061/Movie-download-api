@@ -273,31 +273,101 @@
         function startStatusPolling() {
             if (statusInterval) clearInterval(statusInterval);
             
+            let pollCount = 0;
+            const maxPolls = 150; // 5 minutes max (150 * 2 seconds)
+            
             statusInterval = setInterval(async () => {
                 if (!downloadId) return;
-
+                
+                pollCount++;
+                
                 try {
                     const response = await fetch(`/status/${downloadId}`);
-                    const status = await response.json();
                     
+                    if (response.status === 404) {
+                        // Download ID not found - might have completed very quickly
+                        console.log('Download ID not found - checking if download completed quickly');
+                        clearInterval(statusInterval);
+                        statusInterval = null;
+                        
+                        // Try to check if file is available for download
+                        try {
+                            const downloadResponse = await fetch(`/download/${downloadId}`, {method: 'HEAD'});
+                            if (downloadResponse.ok) {
+                                // File exists, show download link
+                                updateDownloadStatus({
+                                    status: 'completed',
+                                    progress: 100,
+                                    message: 'Download completed successfully!',
+                                    file_ready: true
+                                });
+                            } else {
+                                // File doesn't exist, show error
+                                updateDownloadStatus({
+                                    status: 'failed',
+                                    progress: 0,
+                                    message: 'Download status not found. Download may have failed or completed too quickly.'
+                                });
+                            }
+                        } catch (downloadError) {
+                            updateDownloadStatus({
+                                status: 'failed',
+                                progress: 0,
+                                message: 'Unable to verify download status.'
+                            });
+                        }
+                        
+                        resetDownloadButton();
+                        return;
+                    }
+                    
+                    const status = await response.json();
                     updateDownloadStatus(status);
                     
                     if (status.status === 'completed' || status.status === 'failed' || status.status === 'cancelled') {
                         clearInterval(statusInterval);
                         statusInterval = null;
-                        
-                        const downloadBtn = document.getElementById('downloadBtn');
-                        const downloadText = document.getElementById('downloadText');
-                        const downloadLoading = document.getElementById('downloadLoading');
-                        
-                        downloadBtn.disabled = false;
-                        downloadText.style.display = 'inline';
-                        downloadLoading.style.display = 'none';
+                        resetDownloadButton();
                     }
+                    
+                    // Stop polling after max attempts
+                    if (pollCount >= maxPolls) {
+                        clearInterval(statusInterval);
+                        statusInterval = null;
+                        updateDownloadStatus({
+                            status: 'timeout',
+                            progress: 0,
+                            message: 'Status polling timed out. Download may still be in progress.'
+                        });
+                        resetDownloadButton();
+                    }
+                    
                 } catch (error) {
                     console.error('Status polling error:', error);
+                    pollCount++;
+                    
+                    if (pollCount >= 5) { // Stop after 5 consecutive errors
+                        clearInterval(statusInterval);
+                        statusInterval = null;
+                        updateDownloadStatus({
+                            status: 'error',
+                            progress: 0,
+                            message: 'Unable to check download status due to network errors.'
+                        });
+                        resetDownloadButton();
+                    }
                 }
             }, 2000);
+        }
+        
+        function resetDownloadButton() {
+            const downloadBtn = document.getElementById('downloadBtn');
+            const downloadText = document.getElementById('downloadText');
+            const downloadLoading = document.getElementById('downloadLoading');
+            
+            downloadBtn.disabled = false;
+            downloadText.style.display = 'inline';
+            downloadLoading.style.display = 'none';
         }
 
         function displaySources(data) {
@@ -350,25 +420,46 @@
             const statusMessage = document.getElementById('statusMessage');
             
             if (progressFill) {
-                progressFill.style.width = status.progress + '%';
+                progressFill.style.width = (status.progress || 0) + '%';
+                
+                // Update progress bar color based on status
+                if (status.status === 'completed') {
+                    progressFill.style.backgroundColor = '#4CAF50';
+                } else if (status.status === 'failed' || status.status === 'error') {
+                    progressFill.style.backgroundColor = '#f44336';
+                } else if (status.status === 'cancelled') {
+                    progressFill.style.backgroundColor = '#ff9800';
+                } else {
+                    progressFill.style.backgroundColor = '#2196F3';
+                }
             }
             
             if (statusMessage) {
-                let message = status.message;
+                let message = status.message || 'Processing...';
+                
                 if (status.status === 'downloading' && status.downloaded && status.total_size) {
                     const downloadedMB = (status.downloaded / (1024*1024)).toFixed(2);
                     const totalMB = (status.total_size / (1024*1024)).toFixed(2);
                     message += ` (${downloadedMB}/${totalMB} MB)`;
                 }
-                statusMessage.textContent = message;
                 
-                if (status.status === 'completed') {
+                if (status.status === 'completed' && (status.file_ready || status.file_size)) {
+                    const fileSize = status.file_size ? (status.file_size / (1024*1024)).toFixed(2) : 'Unknown';
                     statusMessage.innerHTML = `
                         ${message}<br>
                         <a href="/download/${downloadId}" class="download-link" download>
-                            📥 Download File (${(status.file_size / (1024*1024)).toFixed(2)} MB)
+                            📥 Download File (${fileSize} MB)
                         </a>
                     `;
+                } else if (status.status === 'failed' || status.status === 'error') {
+                    statusMessage.innerHTML = `
+                        <span style="color: #f44336;">❌ ${message}</span>
+                        ${status.error ? `<br><small>Error: ${status.error}</small>` : ''}
+                    `;
+                } else if (status.status === 'cancelled') {
+                    statusMessage.innerHTML = `<span style="color: #ff9800;">⚠️ ${message}</span>`;
+                } else {
+                    statusMessage.textContent = message;
                 }
             }
         }
