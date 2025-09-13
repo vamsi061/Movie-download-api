@@ -232,14 +232,15 @@ def extract_sources():
 
 @app.route('/download', methods=['POST'])
 def start_download():
-    """Start video download"""
+    """Start video download - returns direct download stream"""
     try:
         data = request.get_json()
         if not data or 'url' not in data:
             return jsonify({'error': 'URL is required'}), 400
         
         url = data['url']
-        quality_preference = data.get('quality', 'best')  # 'best', 'worst', or specific quality like '720'
+        quality_preference = data.get('quality', 'best')
+        download_type = data.get('type', 'direct')  # 'direct' or 'background'
         
         logger.info(f"Starting download from: {url}")
         
@@ -255,12 +256,11 @@ def start_download():
         # Filter out invalid URLs first
         valid_sources = []
         for source in sources:
-            url = source['url']
-            # Check if URL is properly formatted and accessible
-            if (url.startswith(('http://', 'https://')) and 
-                not url.startswith(',//') and 
-                '|' not in url and
-                len(url) > 20):  # Reasonable URL length
+            source_url = source['url']
+            if (source_url.startswith(('http://', 'https://')) and 
+                not source_url.startswith(',//') and 
+                '|' not in source_url and
+                len(source_url) > 20):
                 valid_sources.append(source)
         
         if not valid_sources:
@@ -271,59 +271,58 @@ def start_download():
                 'valid_sources': 0
             }), 404
         
-        # Select best source based on quality preference from valid sources
+        # Select best source
         selected_source = None
         if quality_preference == 'best':
-            # Sort by quality, then by URL reliability (prefer direct file URLs)
             valid_sources.sort(key=lambda x: (x['quality'], 1 if '.mp4' in x['url'] else 0), reverse=True)
             selected_source = valid_sources[0]
         elif quality_preference == 'worst':
             selected_source = min(valid_sources, key=lambda x: x['quality'])
         else:
-            # Try to find specific quality
             try:
                 target_quality = int(quality_preference)
-                # Find closest quality from valid sources
                 selected_source = min(valid_sources, key=lambda x: abs(x['quality'] - target_quality))
             except ValueError:
-                selected_source = valid_sources[0]  # Default to first valid source
+                selected_source = valid_sources[0]
         
         if not selected_source:
             selected_source = valid_sources[0]
         
-        # Generate download ID
-        download_id = str(uuid.uuid4())
+        # For direct download, return streaming response
+        if download_type == 'direct':
+            return stream_video_download(selected_source)
         
-        # Create output filename
-        title = selected_source.get('title', 'video').replace(' ', '_')
-        title = ''.join(c for c in title if c.isalnum() or c in '-_.')[:50]  # Clean filename
-        format_ext = selected_source.get('format', 'mp4')
-        output_filename = f"{title}_{download_id[:8]}.{format_ext}"
-        output_path = os.path.join(download_manager.temp_dir, output_filename)
-        
-        # Start download in background thread
-        download_thread = threading.Thread(
-            target=download_manager.download_video_async,
-            args=(download_id, selected_source, output_path)
-        )
-        download_thread.daemon = True
-        download_thread.start()
-        
-        return jsonify({
-            'success': True,
-            'download_id': download_id,
-            'selected_source': {
-                'url': selected_source['url'][:100] + '...' if len(selected_source['url']) > 100 else selected_source['url'],
-                'quality': selected_source['quality'],
-                'format': selected_source['format'],
-                'method': selected_source['method']
-            },
-            'total_sources_found': len(sources),
-            'valid_sources_found': len(valid_sources),
-            'status_url': f'/status/{download_id}',
-            'download_url': f'/download/{download_id}',
-            'message': 'Download started. Use status_url to track progress.'
-        })
+        # For background download (original method)
+        else:
+            download_id = str(uuid.uuid4())
+            title = selected_source.get('title', 'video').replace(' ', '_')
+            title = ''.join(c for c in title if c.isalnum() or c in '-_.')[:50]
+            format_ext = selected_source.get('format', 'mp4')
+            output_filename = f"{title}_{download_id[:8]}.{format_ext}"
+            output_path = os.path.join(download_manager.temp_dir, output_filename)
+            
+            download_thread = threading.Thread(
+                target=download_manager.download_video_async,
+                args=(download_id, selected_source, output_path)
+            )
+            download_thread.daemon = True
+            download_thread.start()
+            
+            return jsonify({
+                'success': True,
+                'download_id': download_id,
+                'selected_source': {
+                    'url': selected_source['url'][:100] + '...' if len(selected_source['url']) > 100 else selected_source['url'],
+                    'quality': selected_source['quality'],
+                    'format': selected_source['format'],
+                    'method': selected_source['method']
+                },
+                'total_sources_found': len(sources),
+                'valid_sources_found': len(valid_sources),
+                'status_url': f'/status/{download_id}',
+                'download_url': f'/download/{download_id}',
+                'message': 'Download started. Use status_url to track progress.'
+            })
         
     except Exception as e:
         logger.error(f"Download start error: {e}")
@@ -428,6 +427,85 @@ def cleanup_files():
         
     except Exception as e:
         return jsonify({'error': f'Cleanup failed: {str(e)}'}), 500
+
+def stream_video_download(video_source):
+    """Stream video download directly to user"""
+    try:
+        url = video_source['url']
+        
+        # Create filename
+        title = video_source.get('title', 'video').replace(' ', '_')
+        title = ''.join(c for c in title if c.isalnum() or c in '-_.')[:50]
+        format_ext = video_source.get('format', 'mp4')
+        filename = f"{title}.{format_ext}"
+        
+        # Set up headers for video download
+        headers = download_manager.extractor.session.headers.copy()
+        if download_manager.extractor.original_url:
+            headers['Referer'] = download_manager.extractor.original_url
+        
+        headers.update({
+            'Accept': '*/*',
+            'Accept-Encoding': 'identity',
+            'Connection': 'keep-alive',
+            'Range': 'bytes=0-',
+        })
+        
+        logger.info(f"Streaming download: {url}")
+        
+        # Get the video stream
+        response = download_manager.extractor.session.get(url, headers=headers, stream=True, timeout=30)
+        response.raise_for_status()
+        
+        # Create a generator to stream the content
+        def generate():
+            try:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        yield chunk
+            except Exception as e:
+                logger.error(f"Streaming error: {e}")
+                
+        # Get content length if available
+        content_length = response.headers.get('content-length')
+        
+        # Create response headers
+        response_headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Type': 'application/octet-stream',
+            'Cache-Control': 'no-cache',
+        }
+        
+        if content_length:
+            response_headers['Content-Length'] = content_length
+            
+        return Response(
+            generate(),
+            headers=response_headers,
+            mimetype='application/octet-stream'
+        )
+        
+    except Exception as e:
+        logger.error(f"Stream download failed: {e}")
+        return jsonify({'error': f'Stream download failed: {str(e)}'}), 500
+
+@app.route('/download-direct', methods=['POST'])
+def download_direct():
+    """Direct download endpoint - immediately starts download"""
+    try:
+        data = request.get_json()
+        if not data or 'url' not in data:
+            return jsonify({'error': 'URL is required'}), 400
+        
+        # Set download type to direct
+        data['type'] = 'direct'
+        
+        # Reuse the download logic but force direct streaming
+        return start_download()
+        
+    except Exception as e:
+        logger.error(f"Direct download error: {e}")
+        return jsonify({'error': f'Direct download failed: {str(e)}'}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

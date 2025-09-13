@@ -167,6 +167,18 @@
             </select>
         </div>
         
+        <div class="form-group">
+            <label for="downloadMode">Download Mode:</label>
+            <select id="downloadMode">
+                <option value="direct">🚀 Direct Download (Recommended)</option>
+                <option value="background">📊 Background Download (with progress)</option>
+            </select>
+            <small style="color: #666; margin-top: 5px; display: block;">
+                Direct: Downloads immediately to your Downloads folder<br>
+                Background: Shows progress but requires additional click to download
+            </small>
+        </div>
+        
         <div class="button-group">
             <button class="btn-extract" onclick="extractSources()">
                 <span id="extractText">🔍 Extract Sources</span>
@@ -175,6 +187,13 @@
             <button class="btn-download" id="downloadBtn" onclick="startDownload()" disabled>
                 <span id="downloadText">⬇️ Download Video</span>
                 <span id="downloadLoading" class="loading" style="display: none;"></span>
+            </button>
+        </div>
+        
+        <div style="text-align: center; margin-top: 10px;">
+            <button class="btn-download" id="directDownloadBtn" onclick="directDownload()" disabled style="background-color: #FF5722;">
+                <span id="directDownloadText">🚀 Direct Download</span>
+                <span id="directDownloadLoading" class="loading" style="display: none;"></span>
             </button>
         </div>
         
@@ -217,6 +236,7 @@
                     currentSources = data.sources;
                     displaySources(data);
                     document.getElementById('downloadBtn').disabled = false;
+                    document.getElementById('directDownloadBtn').disabled = false;
                 } else {
                     displayError(data.error || 'Failed to extract sources');
                 }
@@ -232,6 +252,12 @@
         async function startDownload() {
             const url = document.getElementById('videoUrl').value;
             const quality = document.getElementById('quality').value;
+            const downloadMode = document.getElementById('downloadMode').value;
+
+            if (downloadMode === 'direct') {
+                directDownload();
+                return;
+            }
 
             const downloadBtn = document.getElementById('downloadBtn');
             const downloadText = document.getElementById('downloadText');
@@ -247,7 +273,7 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ url: url, quality: quality })
+                    body: JSON.stringify({ url: url, quality: quality, type: 'background' })
                 });
 
                 const data = await response.json();
@@ -267,6 +293,73 @@
                 downloadBtn.disabled = false;
                 downloadText.style.display = 'inline';
                 downloadLoading.style.display = 'none';
+            }
+        }
+
+        async function directDownload() {
+            const url = document.getElementById('videoUrl').value;
+            const quality = document.getElementById('quality').value;
+            
+            if (!url) {
+                alert('Please enter a video URL');
+                return;
+            }
+
+            const directBtn = document.getElementById('directDownloadBtn');
+            const directText = document.getElementById('directDownloadText');
+            const directLoading = document.getElementById('directDownloadLoading');
+            
+            directBtn.disabled = true;
+            directText.style.display = 'none';
+            directLoading.style.display = 'inline-block';
+
+            try {
+                // Show immediate feedback
+                displayDirectDownloadStarted();
+                
+                const response = await fetch('/download', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ url: url, quality: quality, type: 'direct' })
+                });
+
+                if (response.ok) {
+                    // Get filename from response headers
+                    const contentDisposition = response.headers.get('Content-Disposition');
+                    let filename = 'video.mp4';
+                    if (contentDisposition) {
+                        const filenameMatch = contentDisposition.match(/filename="(.+)"/);
+                        if (filenameMatch) {
+                            filename = filenameMatch[1];
+                        }
+                    }
+
+                    // Create blob and download
+                    const blob = await response.blob();
+                    const downloadUrl = window.URL.createObjectURL(blob);
+                    
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = downloadUrl;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(downloadUrl);
+                    document.body.removeChild(a);
+                    
+                    displayDirectDownloadComplete(filename);
+                } else {
+                    const errorData = await response.json();
+                    displayError(errorData.error || 'Direct download failed');
+                }
+            } catch (error) {
+                displayError('Network error: ' + error.message);
+            } finally {
+                directBtn.disabled = false;
+                directText.style.display = 'inline';
+                directLoading.style.display = 'none';
             }
         }
 
@@ -462,6 +555,28 @@
                     statusMessage.textContent = message;
                 }
             }
+        }
+
+        function displayDirectDownloadStarted() {
+            const statusDiv = document.getElementById('downloadStatus');
+            statusDiv.innerHTML = `
+                <div class="status">
+                    <h3>🚀 Direct Download Starting</h3>
+                    <p>Your download will begin shortly and save directly to your Downloads folder.</p>
+                    <p>Please wait while we prepare your file...</p>
+                </div>
+            `;
+        }
+
+        function displayDirectDownloadComplete(filename) {
+            const statusDiv = document.getElementById('downloadStatus');
+            statusDiv.innerHTML = `
+                <div class="status" style="background-color: #e8f5e8; border-left-color: #4CAF50;">
+                    <h3>✅ Download Complete!</h3>
+                    <p><strong>File:</strong> ${filename}</p>
+                    <p>Your video has been saved to your Downloads folder.</p>
+                </div>
+            `;
         }
 
         function displayError(error) {
